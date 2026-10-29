@@ -7,8 +7,10 @@
 <style>
   html, body { margin: 0; height: 100%; background: #07060d; }
   body { overflow: hidden; }
-  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
-  canvas:active { cursor: grabbing; }
+  #c { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+  #c:active { cursor: grabbing; }
+  #title { position: fixed; top: clamp(12px, 5vh, 56px); left: 50%; transform: translateX(-50%);
+           width: min(92vw, 960px); aspect-ratio: 3 / 1; pointer-events: none; }
 </style>
 <script type="importmap">
 {
@@ -554,6 +556,21 @@ if (fixedT !== null) {
   const start = performance.now();
   renderer.setAnimationLoop(() => renderAt((performance.now() - start) / 1000));
 }
+</script>
+
+<!-- Animated title, authored in Rive: source in rive/neon-title, rebuilt with `rive rive/neon-title --once`. -->
+<canvas id="title" role="img" aria-label="Yuji Jones, Portfolio"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/@rive-app/webgl2@2.44.2/rive.js"></script>
+<script>
+  const title = new rive.Rive({
+    src: 'neon-title.riv',
+    canvas: document.getElementById('title'),
+    stateMachine: 'Title',
+    autoplay: true,
+    layout: new rive.Layout({ fit: rive.Fit.Contain, alignment: rive.Alignment.Center }),
+    onLoad: () => title.resizeDrawingSurfaceToCanvas(),
+  });
+  addEventListener('resize', () => title.resizeDrawingSurfaceToCanvas());
 </script>
 </body>
 </html>

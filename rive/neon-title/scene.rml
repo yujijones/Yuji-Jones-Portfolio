@@ -1,0 +1,209 @@
+<Rive version="1" kind="fragment">
+    <!-- Transparent artboard: the title is meant to sit over the Neon City canvas. -->
+    <Artboard defaultStateMachineId="0:7" styleId="0:5" width="1200" height="400" name="Neon Title" id="0:2">
+        <LayoutComponentStyle name="Artboard Style" id="0:5"/>
+
+        <!-- Name, crisp. First declared paints on top, so it sits over its glow. -->
+        <Text x="600" y="170" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Name" id="0:20">
+            <TextStylePaint fontSize="112" fontAssetId="0:90" familyName="Unbounded" styleName="ExtraBold" name="Name Style" id="0:21">
+                <Fill name="Fill">
+                    <LinearGradient startX="-900" startY="0" endX="-300" endY="0" name="Sheen" id="0:23">
+                        <GradientStop colorValue="FFFFBFE6" position="0"/>
+                        <GradientStop colorValue="FFFFBFE6" position="0.3"/>
+                        <GradientStop colorValue="FFFFFFFF" position="0.47"/>
+                        <GradientStop colorValue="FFB8F4FF" position="0.55"/>
+                        <GradientStop colorValue="FFFFBFE6" position="0.7"/>
+                        <GradientStop colorValue="FFFFBFE6" position="1"/>
+                    </LinearGradient>
+                </Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:21" text="YUJI JONES" name="Run"/>
+            <TextModifierGroup modifyOpacity="true" invertOpacity="true" modifyTranslation="true" modifyScale="true"
+                               opacity="0" y="46" scaleX="0.7" scaleY="0.7" name="Rise In" id="0:24">
+                <TextModifierRange unitsValue="1" modifyFrom="-0.3" modifyTo="1" falloffFrom="0" falloffTo="1" name="Sweep" id="0:25"/>
+            </TextModifierGroup>
+        </Text>
+
+        <!-- Same lettering, feathered into a pink neon glow behind the name. -->
+        <Text x="600" y="170" sizingValue="autoWidth" originX="0.5" originY="0.5" name="Name Glow" id="0:30">
+            <TextStylePaint fontSize="112" fontAssetId="0:90" familyName="Unbounded" styleName="ExtraBold" name="Glow Style" id="0:31">
+                <Fill fillRule="clockwise" name="Glow">
+                    <SolidColor colorValue="FFFF2E9A" name="Color"/>
+                    <Feather strength="26" name="Feather"/>
+                </Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:31" text="YUJI JONES" name="Run"/>
+            <TextModifierGroup modifyOpacity="true" invertOpacity="true" modifyTranslation="true" modifyScale="true"
+                               opacity="0" y="46" scaleX="0.7" scaleY="0.7" name="Rise In" id="0:34">
+                <TextModifierRange unitsValue="1" modifyFrom="-0.3" modifyTo="1" falloffFrom="0" falloffTo="1" name="Sweep" id="0:35"/>
+            </TextModifierGroup>
+        </Text>
+
+        <!-- Neon underline: one trim drives both strokes, drawing out from the centre. -->
+        <GroupEffect name="Draw On" id="0:45">
+            <TrimPath start="0.5" end="0.5" name="Trim" id="0:46"/>
+        </GroupEffect>
+        <Shape x="600" y="262" name="Underline" id="0:40">
+            <PointsPath isClosed="false" name="Line">
+                <StraightVertex x="-390" y="0"/>
+                <StraightVertex x="390" y="0"/>
+            </PointsPath>
+            <Stroke thickness="8" cap="round" name="Glow">
+                <LinearGradient startX="-390" startY="0" endX="390" endY="0" name="Gradient">
+                    <GradientStop colorValue="FFFF2E9A" position="0"/>
+                    <GradientStop colorValue="FF2BD9FF" position="1"/>
+                </LinearGradient>
+                <Feather strength="14" name="Feather"/>
+                <TargetEffect targetId="0:45" name="Use Draw On"/>
+            </Stroke>
+            <Stroke thickness="3" cap="round" name="Crisp">
+                <LinearGradient startX="-390" startY="0" endX="390" endY="0" name="Gradient">
+                    <GradientStop colorValue="FFFF8AC8" position="0"/>
+                    <GradientStop colorValue="FF9AF0FF" position="1"/>
+                </LinearGradient>
+                <TargetEffect targetId="0:45" name="Use Draw On"/>
+            </Stroke>
+        </Shape>
+
+        <Text x="600" y="312" sizingValue="autoWidth" originX="0.5" originY="0.5" opacity="0" name="Subtitle" id="0:50">
+            <TextStylePaint fontSize="30" letterSpacing="40" fontAssetId="0:91" familyName="Space Grotesk" styleName="Medium" name="Subtitle Style" id="0:51">
+                <Fill name="Fill">
+                    <SolidColor colorValue="FFCFF8FF" name="Color"/>
+                </Fill>
+            </TextStylePaint>
+            <TextValueRun styleId="0:51" text="PORTFOLIO" name="Run"/>
+        </Text>
+
+        <!-- Soft dark backdrop so the lettering reads over a busy scene. Declared last: drawn underneath. -->
+        <Shape x="600" y="215" opacity="0" name="Backdrop" id="0:55">
+            <Ellipse width="980" height="250" name="Path"/>
+            <Fill fillRule="clockwise" name="Fill">
+                <SolidColor colorValue="A0070510" name="Color"/>
+                <Feather strength="70" name="Feather"/>
+            </Fill>
+        </Shape>
+
+        <!-- Two layers: the intro plays once while the idle loop runs underneath from the start. -->
+        <StateMachine name="Title" id="0:7">
+            <StateMachineLayer name="Intro" id="0:8">
+                <AnyState x="200" y="-120"/>
+                <ExitState x="400" y="-120"/>
+                <EntryState x="0" y="0">
+                    <StateTransition stateToId="0:12"/>
+                </EntryState>
+                <AnimationState x="200" y="0" animationId="0:60" id="0:12"/>
+            </StateMachineLayer>
+            <StateMachineLayer name="Idle" id="0:9">
+                <AnyState x="200" y="-120"/>
+                <ExitState x="400" y="-120"/>
+                <EntryState x="0" y="0">
+                    <StateTransition stateToId="0:13"/>
+                </EntryState>
+                <AnimationState x="200" y="0" animationId="0:70" id="0:13"/>
+            </StateMachineLayer>
+        </StateMachine>
+
+        <!-- 2.5 s: letters rise in left to right, the underline draws on, the subtitle tracks in. -->
+        <LinearAnimation loopValue="oneShot" duration="150" name="Intro" id="0:60">
+            <KeyedObject objectId="0:25">
+                <KeyedProperty property="modifyFrom">
+                    <KeyFrameDouble value="-0.3" frame="0" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.33" y1="0" x2="0.25" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="1" frame="84"/>
+                </KeyedProperty>
+                <KeyedProperty property="falloffFrom">
+                    <KeyFrameDouble value="0" frame="0" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.33" y1="0" x2="0.25" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="1.3" frame="84"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="0:35">
+                <KeyedProperty property="modifyFrom">
+                    <KeyFrameDouble value="-0.3" frame="6" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.33" y1="0" x2="0.25" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="1" frame="96"/>
+                </KeyedProperty>
+                <KeyedProperty property="falloffFrom">
+                    <KeyFrameDouble value="0" frame="6" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.33" y1="0" x2="0.25" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="1.3" frame="96"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="0:46">
+                <KeyedProperty property="start">
+                    <KeyFrameDouble value="0.5" frame="60" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.16" y1="1" x2="0.3" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="0" frame="115"/>
+                </KeyedProperty>
+                <KeyedProperty property="end">
+                    <KeyFrameDouble value="0.5" frame="60" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.16" y1="1" x2="0.3" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="1" frame="115"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="0:55">
+                <KeyedProperty property="opacity">
+                    <KeyFrameDouble value="0" frame="0" interpolationType="linear"/>
+                    <KeyFrameDouble value="1" frame="40"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="0:50">
+                <KeyedProperty property="opacity">
+                    <KeyFrameDouble value="0" frame="84" interpolationType="linear"/>
+                    <KeyFrameDouble value="1" frame="130"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="0:51">
+                <KeyedProperty property="letterSpacing">
+                    <KeyFrameDouble value="40" frame="84" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.16" y1="1" x2="0.3" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="14" frame="150"/>
+                </KeyedProperty>
+            </KeyedObject>
+        </LinearAnimation>
+
+        <!-- 5 s loop: a sheen crosses the name, the glow breathes and flickers like a neon tube. -->
+        <LinearAnimation loopValue="loop" duration="300" name="Idle" id="0:70">
+            <KeyedObject objectId="0:23">
+                <KeyedProperty property="startX">
+                    <KeyFrameDouble value="-900" frame="150" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.45" y1="0" x2="0.55" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="1100" frame="240"/>
+                </KeyedProperty>
+                <KeyedProperty property="endX">
+                    <KeyFrameDouble value="-300" frame="150" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.45" y1="0" x2="0.55" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="1700" frame="240"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="0:30">
+                <KeyedProperty property="opacity">
+                    <KeyFrameDouble value="1" frame="0" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.45" y1="0" x2="0.55" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="0.7" frame="90" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.45" y1="0" x2="0.55" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="1" frame="180" interpolationType="hold"/>
+                    <KeyFrameDouble value="0.25" frame="246" interpolationType="hold"/>
+                    <KeyFrameDouble value="1" frame="249" interpolationType="hold"/>
+                    <KeyFrameDouble value="0.35" frame="254" interpolationType="hold"/>
+                    <KeyFrameDouble value="1" frame="256" interpolationType="hold"/>
+                    <KeyFrameDouble value="1" frame="300"/>
+                </KeyedProperty>
+            </KeyedObject>
+        </LinearAnimation>
+    </Artboard>
+
+    <FontAsset file="fonts/Unbounded-ExtraBold-Latin.ttf" name="Unbounded" id="0:90"/>
+    <FontAsset file="fonts/SpaceGrotesk-Medium-Latin.ttf" name="Space Grotesk" id="0:91"/>
+</Rive>

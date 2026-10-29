@@ -1,0 +1,6 @@
+name: neon-title
+output:
+  dir: ../..          # writes neon-title.riv at the site root, next to neon-city.html
+logs:
+  file: build/rive.log
+  problems: build/problems.log
