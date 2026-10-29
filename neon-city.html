@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neon City</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #07060d; }
+  body { overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// ---------------------------------------------------------------- constants
+const LOOP = 90;                                  // seconds: one camera orbit; every motion is periodic in it
+const BLOCKS = 22, PITCH = 48, STREET = 12;       // city grid: BLOCKS x BLOCKS blocks, street centre lines every PITCH
+const HALF = BLOCKS * PITCH / 2;                  // 528: street centre lines run from -HALF to HALF
+const INNER = PITCH - STREET;                     // 36: block side
+const SIDEWALK = 3;
+const LANE = 2.8, CURB = 5.6;                     // lane and streetlight offsets from a street's centre line
+const LIGHT_AT = [6, 18, 30];                     // streetlights along each block side (block-relative)
+const WW = 2.6, WH = 3.4;                         // window cell width, floor height
+const FOG_DENSITY = 0.0014;
+const SUN_DIR = new THREE.Vector3(-0.8, 0.12, -0.32).normalize();
+const SUN_COL = new THREE.Color(1.0, 0.5, 0.3).multiplyScalar(0.5);
+const SKY_COL = new THREE.Color(0.12, 0.12, 0.26);
+const GND_COL = new THREE.Color(0.07, 0.045, 0.06);
+const FOG_COL = new THREE.Color(0.13, 0.055, 0.12);
+
+const params = new URLSearchParams(location.search);
+const fixedT = Number.isFinite(parseFloat(params.get('t'))) ? parseFloat(params.get('t')) : null;
+
+// ---------------------------------------------------------------- helpers
+const mulberry32 = a => () => {
+  a |= 0; a = a + 0x6D2B79F5 | 0;
+  let t = Math.imul(a ^ a >>> 15, 1 | a);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+  return ((t ^ t >>> 14) >>> 0) / 4294967296;
+};
+const rand = mulberry32(20261029);
+const range = (a, b) => a + (b - a) * rand();
+const pick = arr => arr[Math.floor(rand() * arr.length)];
+const mod = (x, m) => ((x % m) + m) % m;
+const streetLine = i => -HALF + i * PITCH;        // i = 0..BLOCKS
+const blockCentre = i => streetLine(i) + PITCH / 2; // i = 0..BLOCKS-1
+
+// ---------------------------------------------------------------- renderer
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 1, 6000);
+
+const fogUniforms = { uFogCol: { value: FOG_COL }, uFogDensity: { value: FOG_DENSITY } };
+const FOG_GLSL = /* glsl */`
+  uniform vec3 uFogCol;
+  uniform float uFogDensity;
+  vec3 fog(vec3 c, float depth) { return mix(c, uFogCol, 1.0 - exp(-uFogDensity * uFogDensity * depth * depth)); }`;
+const HASH_GLSL = /* glsl */`
+  float hash(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.x + p.y) * p.z);
+  }`;
+
+// ---------------------------------------------------------------- city layout
+// Two downtown clusters; height falls off with distance from them.
+const C2 = new THREE.Vector2(130, -110);
+const density = (x, z) => Math.exp(-((x * x + z * z) / (150 * 150))) + 0.7 * Math.exp(-(((x - C2.x) ** 2 + (z - C2.y) ** 2) / (80 * 80)));
+
+const PALETTE = {
+  concrete: [[0.32, 0.3, 0.3], [0.38, 0.34, 0.3], [0.26, 0.26, 0.29], [0.42, 0.36, 0.32], [0.22, 0.2, 0.22]],
+  glass: [[0.08, 0.12, 0.2], [0.1, 0.1, 0.14], [0.06, 0.1, 0.13], [0.14, 0.16, 0.22]],
+};
+
+const solids = [];   // { x, y, z, sx, sy, sz, color, seed } — buildings, antennas, trees (seed < 0: no windows)
+const beacons = [];  // aviation lights on tall roofs
+const parks = new Uint8Array(BLOCKS * BLOCKS * 4);
+
+for (let bi = 0; bi < BLOCKS; bi++) {
+  for (let bj = 0; bj < BLOCKS; bj++) {
+    const cx = blockCentre(bi), cz = blockCentre(bj);
+    const f = density(cx, cz);
+    const r = Math.hypot(cx, cz);
+
+    if (f < 0.6 && r > 90 && rand() < 0.06) {
+      parks[(bj * BLOCKS + bi) * 4] = 255;
+      const n = 22 + Math.floor(rand() * 16);
+      for (let k = 0; k < n; k++) {
+        const x = range(-15, 15), z = range(-15, 15);
+        if (Math.abs(x) < 2.2 || Math.abs(z) < 2.2) continue;  // keep the cross paths clear
+        const s = range(1.6, 3.0);
+        solids.push({ x: cx + x, y: s * 1.05, z: cz + z, sx: s, sy: s * 1.4, sz: s,
+          color: [range(0.03, 0.06), range(0.08, 0.13), range(0.03, 0.05)], seed: -1, tree: true });
+      }
+      continue;
+    }
+
+    const downtown = f > 0.6;
+    const nx = downtown ? 1 + Math.floor(rand() * 2) : 2 + Math.floor(rand() * 2);
+    const nz = downtown ? 1 + Math.floor(rand() * 2) : 2 + Math.floor(rand() * 2);
+    const build = INNER - 2 * SIDEWALK;
+    const lx = build / nx, lz = build / nz;
+    for (let i = 0; i < nx; i++) {
+      for (let j = 0; j < nz; j++) {
+        if (!downtown && rand() < 0.07) continue;            // a parking lot
+        const w = (lx - 1.5) * range(0.82, 1.0), d = (lz - 1.5) * range(0.82, 1.0);
+        const x = cx - build / 2 + lx * (i + 0.5) + range(-1, 1) * (lx - 1.5 - w) / 2;
+        const z = cz - build / 2 + lz * (j + 0.5) + range(-1, 1) * (lz - 1.5 - d) / 2;
+        let h = 5 + 12 * rand() + f * (30 + 160 * Math.pow(rand(), 1.3));
+        if (r < 260 && rand() < 0.03) h += range(30, 70);
+        if (r > 360) h *= 0.7;
+        const glassy = h > 60 && rand() < 0.65;
+        const color = pick(glassy ? PALETTE.glass : PALETTE.concrete).map(c => c * range(0.85, 1.15));
+        const seed = 1 + Math.floor(rand() * 997);
+        const tiers = h > 50 && rand() < 0.6 ? (h > 110 ? 3 : 2) : 1;
+        let y0 = 0, tw = w, td = d;
+        for (let k = 0; k < tiers; k++) {
+          const top = k === tiers - 1 ? h : h * (tiers === 3 ? [0.55, 0.82][k] : 0.68);
+          solids.push({ x, y: (y0 + top) / 2, z, sx: tw, sy: top - y0, sz: td, color, seed, h });
+          y0 = top; tw *= range(0.68, 0.8); td *= range(0.68, 0.8);
+        }
+        if (h > 90) beacons.push(new THREE.Vector3(x, h + 1, z));
+      }
+    }
+  }
+}
+
+// antennas on the tallest towers, beacons move to their tips
+{
+  const tops = solids.filter(s => s.seed >= 0 && Math.abs(s.y + s.sy / 2 - s.h) < 1e-6).sort((a, b) => b.h - a.h).slice(0, 8);
+  for (const s of tops) {
+    const len = range(12, 26);
+    solids.push({ x: s.x, y: s.h + len / 2, z: s.z, sx: 0.7, sy: len, sz: 0.7, color: [0.15, 0.15, 0.17], seed: -1 });
+    const b = beacons.find(b => b.x === s.x && b.z === s.z);
+    if (b) b.y = s.h + len + 0.5;
+  }
+}
+
+// ---------------------------------------------------------------- solid shader (buildings, antennas, trees, cars)
+const solidMaterial = new THREE.ShaderMaterial({
+  extensions: { derivatives: true },
+  uniforms: {
+    ...fogUniforms,
+    uSunDir: { value: SUN_DIR }, uSunCol: { value: SUN_COL },
+    uSkyCol: { value: SKY_COL }, uGndCol: { value: GND_COL },
+    uPhase: { value: 0 },
+  },
+  vertexShader: /* glsl */`
+    attribute vec3 aColor;
+    attribute float aSeed;
+    varying vec3 vWorld, vNormal, vColor;
+    varying vec4 vBox;     // footprint centre xz, half extents xz
+    varying vec2 vY;       // bottom, top
+    varying float vSeed, vDepth;
+    void main() {
+      vec4 w = modelMatrix * instanceMatrix * vec4(position, 1.0);
+      vWorld = w.xyz;
+      vNormal = normalize(mat3(instanceMatrix) * normal);
+      vec3 sc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+      vec3 c = instanceMatrix[3].xyz;
+      vBox = vec4(c.xz, sc.xz * 0.5);
+      vY = vec2(c.y - sc.y * 0.5, c.y + sc.y * 0.5);
+      vColor = aColor;
+      vSeed = aSeed;
+      vec4 mv = viewMatrix * w;
+      vDepth = -mv.z;
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: /* glsl */`
+    ${FOG_GLSL}
+    ${HASH_GLSL}
+    uniform vec3 uSunDir, uSunCol, uSkyCol, uGndCol;
+    uniform float uPhase;
+    varying vec3 vWorld, vNormal, vColor;
+    varying vec4 vBox;
+    varying vec2 vY;
+    varying float vSeed, vDepth;
+    const float WW = ${WW.toFixed(2)}, WH = ${WH.toFixed(2)};
+
+    void main() {
+      vec3 n = normalize(vNormal);
+      vec3 V = normalize(cameraPosition - vWorld);
+      float diff = max(dot(n, uSunDir), 0.0);
+      vec3 amb = mix(uGndCol, uSkyCol, 0.5 + 0.5 * n.y);
+      float ao = mix(0.45, 1.0, smoothstep(0.0, 40.0, vWorld.y));
+      vec3 wall = vColor * (uSunCol * diff + amb) * ao;
+      vec3 col = wall, emit = vec3(0.0);
+
+      // facade coordinates, computed outside branches so the derivatives stay defined
+      bool fx = abs(n.x) > 0.5;
+      float width = 2.0 * (fx ? vBox.w : vBox.z);
+      float u = fx ? vWorld.z - (vBox.y - vBox.w) : vWorld.x - (vBox.x - vBox.z);
+      float y = vWorld.y - vY.x;
+      float cols = floor(width / WW), rows = floor((vY.y - vY.x - 1.0) / WH);
+      vec2 cell = vec2((u - 0.5 * (width - cols * WW)) / WW, y / WH);
+      vec2 fw = fwidth(cell);
+
+      if (vSeed < 0.0) {
+        // plain: trees, antennas, car bodies
+      } else if (n.y > 0.5) {
+        vec2 e = vBox.zw - abs(vWorld.xz - vBox.xy);
+        float rim = 1.0 - smoothstep(0.35, 0.45, min(e.x, e.y));
+        col = mix(wall * 0.5, wall * 1.15, rim);
+      } else if (abs(n.y) < 0.5) {
+        float s = floor(vSeed + 0.5);  // integer seed: interpolation error must not reach the hash
+        float face = fx ? (n.x > 0.0 ? 1.0 : 2.0) : (n.z > 0.0 ? 3.0 : 4.0);
+        vec2 id = floor(cell), f = fract(cell);
+        float inside = step(0.0, id.x) * step(id.x, cols - 1.0) * step(1.0, id.y) * step(id.y, rows - 1.0);
+        vec2 hs = vec2(0.32, 0.28);
+        vec2 m = 1.0 - smoothstep(hs - fw, hs + fw, abs(f - 0.5));
+        float win = m.x * m.y * inside;
+
+        float litFrac = 0.06 + 0.32 * hash(vec3(s, 1.7, 3.1));
+        float hCell = hash(vec3(id + 0.5, s * 7.0 + face));
+        float on = step(hCell, litFrac * (0.4 + 1.2 * hash(vec3(id.y, s, face))));
+        float toggles = step(0.975, hash(vec3(id.yx, s + face * 3.0)));
+        on = mix(on, step(0.5, fract(hCell * 5.0 + uPhase * 3.0)), toggles);
+
+        vec3 wc = mix(vec3(0.7, 0.82, 1.0), vec3(1.0, 0.7, 0.4), step(0.45, hash(vec3(s, 9.1, 2.3))));
+        float fres = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+        vec3 glass = mix(vec3(0.008, 0.01, 0.022), uFogCol * 0.6, 0.12 + 0.6 * fres);
+
+        vec3 nearCol = mix(col, glass, win * (1.0 - on));
+        vec3 nearEmit = wc * (0.7 + 0.6 * hash(vec3(id, s + 4.0))) * win * on * 1.7;
+        float band = step(WH, y) * step(y, rows * WH) * step(0.0, cell.x) * step(cell.x, cols);
+        float cover = 4.0 * hs.x * hs.y * band;
+        vec3 farCol = mix(col, glass, cover * (1.0 - litFrac));
+        vec3 farEmit = wc * cover * litFrac * 1.2;
+        float lod = smoothstep(0.35, 0.9, max(fw.x, fw.y));
+        col = mix(nearCol, farCol, lod);
+        emit = mix(nearEmit, farEmit, lod);
+
+        // street-level shopfronts
+        float shop = step(0.3, hash(vec3(s, 5.5, face))) * smoothstep(0.55, 0.7, y) * (1.0 - smoothstep(2.65, 2.8, y));
+        emit += vec3(1.0, 0.66, 0.36) * shop * step(0.1, fract(u / 1.8)) * 1.1;
+      }
+      gl_FragColor = vec4(fog(col + emit, vDepth), 1.0);
+    }`,
+});
+
+function instanced(geometry, items, material) {
+  const mesh = new THREE.InstancedMesh(geometry, material, items.length);
+  const colors = new Float32Array(items.length * 3), seeds = new Float32Array(items.length);
+  const m = new THREE.Matrix4();
+  items.forEach((s, i) => {
+    m.makeScale(s.sx, s.sy, s.sz).setPosition(s.x, s.y, s.z);
+    mesh.setMatrixAt(i, m);
+    colors.set(s.color, i * 3);
+    seeds[i] = s.seed;
+  });
+  geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(colors, 3));
+  geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
+  return mesh;
+}
+
+scene.add(instanced(new THREE.BoxGeometry(1, 1, 1), solids.filter(s => !s.tree), solidMaterial));
+scene.add(instanced(new THREE.IcosahedronGeometry(0.75, 1), solids.filter(s => s.tree), solidMaterial));
+
+// ---------------------------------------------------------------- ground: streets, markings, sidewalks, parks, light pools
+const parkTex = new THREE.DataTexture(parks, BLOCKS, BLOCKS);
+parkTex.needsUpdate = true;
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(8000, 8000).rotateX(-Math.PI / 2),
+  new THREE.ShaderMaterial({
+    extensions: { derivatives: true },
+    uniforms: { ...fogUniforms, uParks: { value: parkTex } },
+    vertexShader: /* glsl */`
+      varying vec3 vWorld;
+      varying float vDepth;
+      void main() {
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vWorld = w.xyz;
+        vec4 mv = viewMatrix * w;
+        vDepth = -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */`
+      ${FOG_GLSL}
+      uniform sampler2D uParks;
+      varying vec3 vWorld;
+      varying float vDepth;
+      const float PITCH = ${PITCH.toFixed(1)}, STREET = ${STREET.toFixed(1)}, HALF = ${HALF.toFixed(1)}, BLOCKS = ${BLOCKS.toFixed(1)};
+      const float CURB = ${CURB.toFixed(2)}, SIDEWALK = ${SIDEWALK.toFixed(1)};
+
+      void main() {
+        vec2 p = vWorld.xz;
+        vec2 q = mod(p + STREET * 0.5, PITCH);   // street where q < STREET
+        float aaQ = fwidth(p.x) + fwidth(p.y);
+        vec3 col = vec3(0.03, 0.028, 0.036);
+        bool city = max(abs(p.x), abs(p.y)) < HALF + STREET * 0.5;
+        bool sx = q.x < STREET, sz = q.y < STREET;
+        if (city && (sx || sz)) {
+          col = vec3(0.026, 0.026, 0.032);
+          if (!(sx && sz)) {
+            float across = (sx ? q.x : q.y) - STREET * 0.5;
+            float a = (sx ? q.y : q.x) - STREET;            // 0..INNER along the block side
+            float along = sx ? p.y : p.x;
+            float dash = (1.0 - smoothstep(0.1, 0.1 + aaQ, abs(across))) * step(mod(along, 6.0), 3.0);
+            col = mix(col, vec3(0.45, 0.33, 0.1), dash * 0.7);
+            float zebra = step(mod(across + 6.0, 1.2), 0.6) * step(abs(across), 5.0)
+                        * (step(a, 2.4) + step(PITCH - STREET - 2.4, a));
+            col = mix(col, vec3(0.3, 0.29, 0.3), zebra * 0.45);
+            float al = 6.0 + 12.0 * clamp(floor((a - 6.0) / 12.0 + 0.5), 0.0, 2.0);
+            float dc = abs(abs(across) - CURB);
+            col += vec3(1.0, 0.6, 0.28) * 0.3 * exp(-((a - al) * (a - al) + dc * dc) / 14.0);
+          }
+        } else if (city) {
+          vec2 b = q - STREET;
+          vec2 idx = floor((p + STREET * 0.5) / PITCH) + BLOCKS * 0.5;
+          float park = texture2D(uParks, (idx + 0.5) / BLOCKS).r;
+          float edge = min(min(b.x, b.y), min(PITCH - STREET - b.x, PITCH - STREET - b.y));
+          vec3 inner = mix(vec3(0.045, 0.043, 0.048), vec3(0.018, 0.04, 0.018), park);
+          float path = min(abs(b.x - 18.0), abs(b.y - 18.0));
+          inner = mix(inner, vec3(0.08, 0.07, 0.065), park * (1.0 - smoothstep(1.0, 1.2, path)));
+          col = mix(vec3(0.085, 0.08, 0.085), inner, smoothstep(SIDEWALK - 0.2, SIDEWALK, edge));
+          // spill from the streetlights onto the sidewalk
+          col += vec3(1.0, 0.6, 0.28) * 0.07 * exp(-(edge * edge) / 6.0) * (1.0 - smoothstep(SIDEWALK, SIDEWALK + 0.5, edge));
+        }
+        gl_FragColor = vec4(fog(col, vDepth), 1.0);
+      }`,
+  }),
+);
+scene.add(ground);
+
+// ---------------------------------------------------------------- sky
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(4000, 48, 24),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false,
+    uniforms: { uSunDir: { value: SUN_DIR }, uFogCol: { value: FOG_COL } },
+    vertexShader: /* glsl */`
+      varying vec3 vDir;
+      void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: /* glsl */`
+      uniform vec3 uSunDir, uFogCol;
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        float sun = pow(max(dot(normalize(d.xz), normalize(uSunDir.xz)), 0.0), 4.0);
+        vec3 horizon = mix(uFogCol, vec3(0.75, 0.26, 0.12), sun);
+        vec3 col = mix(horizon, vec3(0.05, 0.03, 0.1), smoothstep(0.0, 0.2, d.y));
+        col = mix(col, vec3(0.004, 0.006, 0.022), smoothstep(0.15, 0.75, d.y));
+        col += vec3(1.0, 0.4, 0.15) * 0.35 * sun * exp(-max(d.y, 0.0) * 18.0);
+        col = mix(uFogCol, col, smoothstep(-0.04, 0.01, d.y));
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  }),
+);
+sky.renderOrder = -1;
+scene.add(sky);
+
+// ---------------------------------------------------------------- glowing points (streetlights, car lights, beacons, stars)
+const pointMaterial = fogDensity => new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { uFogCol: { value: FOG_COL }, uFogDensity: { value: fogDensity }, uScale: { value: 1 }, uBlink: { value: 1 } },
+  vertexShader: /* glsl */`
+    attribute vec3 aCol;
+    attribute float aSize, aBlink;
+    uniform float uScale, uBlink, uFogDensity;
+    varying vec3 vCol;
+    void main() {
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      float px = aSize * uScale / -mv.z;
+      gl_PointSize = max(px, 2.0);
+      float fog = 1.0 - exp(-uFogDensity * uFogDensity * mv.z * mv.z);
+      vCol = aCol * clamp(px / 2.0, 0.0, 1.0) * mix(1.0, uBlink, aBlink) * (1.0 - fog);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: /* glsl */`
+    varying vec3 vCol;
+    void main() {
+      float d = length(gl_PointCoord - 0.5) * 2.0;
+      gl_FragColor = vec4(vCol * exp(-d * d * 4.0) * (1.0 - smoothstep(0.8, 1.0, d)), 1.0);
+    }`,
+});
+
+function points(count, material) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+  g.setAttribute('aCol', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+  g.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(count), 1));
+  g.setAttribute('aBlink', new THREE.BufferAttribute(new Float32Array(count), 1));
+  const p = new THREE.Points(g, material);
+  p.frustumCulled = false;
+  const set = (i, pos, col, size, blink = 0) => {
+    g.attributes.position.array.set(pos, i * 3);
+    g.attributes.aCol.array.set(col, i * 3);
+    g.attributes.aSize.array[i] = size;
+    g.attributes.aBlink.array[i] = blink;
+  };
+  return { p, g, set };
+}
+
+const glowMaterial = pointMaterial(FOG_DENSITY);
+const pointMaterials = [glowMaterial];
+
+{
+  const lamps = [];
+  for (let s = 0; s <= BLOCKS; s++) {
+    for (let b = 0; b < BLOCKS; b++) {
+      for (const a of LIGHT_AT) {
+        for (const side of [-1, 1]) {
+          const along = streetLine(b) + STREET / 2 + a, at = streetLine(s) + side * CURB;
+          lamps.push([along, 6.5, at], [at, 6.5, along]);
+        }
+      }
+    }
+  }
+  const all = [...lamps.map(pos => [pos, [3.2, 1.9, 0.9], 1.4, 0]), ...beacons.map(b => [b.toArray(), [6, 0.15, 0.08], 3.0, 1])];
+  const pts = points(all.length, glowMaterial);
+  all.forEach(([pos, col, size, blink], i) => pts.set(i, pos, col, size, blink));
+  scene.add(pts.p);
+}
+
+{
+  const starMaterial = pointMaterial(0);
+  pointMaterials.push(starMaterial);
+  const n = 1400, pts = points(n, starMaterial);
+  for (let i = 0; i < n; i++) {
+    const y = range(0.08, 1), phi = range(0, 2 * Math.PI), rr = Math.sqrt(1 - y * y);
+    const k = range(0.15, 0.7) * Math.min(1, (y - 0.08) * 6);
+    pts.set(i, [3500 * rr * Math.cos(phi), 3500 * y, 3500 * rr * Math.sin(phi)], [k, k, k * 1.1], range(3, 6));
+  }
+  scene.add(pts.p);
+}
+
+// ---------------------------------------------------------------- traffic
+// Every lane is one street long (2*HALF) and wraps; speed = k * length / LOOP keeps the loop seamless.
+const cars = [];
+for (let s = 0; s <= BLOCKS; s++) {
+  for (const axis of [0, 1]) {
+    const avenue = s % 4 === 3;
+    for (const dir of [-1, 1]) {
+      const n = Math.floor((avenue ? 14 : 4) + rand() * 9);
+      const k = avenue ? 2 : 1;
+      for (let j = 0; j < n; j++) {
+        cars.push({ axis, dir, k, at: streetLine(s) + dir * LANE, offset: (j + 0.7 * rand()) / n * 2 * HALF,
+          color: pick([[0.5, 0.5, 0.52], [0.05, 0.05, 0.06], [0.45, 0.06, 0.05], [0.08, 0.14, 0.3], [0.6, 0.45, 0.1], [0.2, 0.2, 0.22]]) });
+      }
+    }
+  }
+}
+const carMesh = instanced(new THREE.BoxGeometry(1, 1, 1),
+  cars.map(c => ({ x: 0, y: 0, z: 0, sx: 1, sy: 1, sz: 1, color: c.color, seed: -1 })), solidMaterial);
+carMesh.frustumCulled = false;
+scene.add(carMesh);
+const carLights = points(cars.length * 2, glowMaterial);
+scene.add(carLights.p);
+cars.forEach((c, i) => {
+  carLights.g.attributes.aCol.array.set([3.0, 2.6, 2.0], i * 6);
+  carLights.g.attributes.aCol.array.set([2.6, 0.08, 0.04], i * 6 + 3);
+  carLights.g.attributes.aSize.array[i * 2] = 2.4;
+  carLights.g.attributes.aSize.array[i * 2 + 1] = 1.8;
+});
+
+function updateTraffic(t) {
+  const M = carMesh.instanceMatrix.array, P = carLights.g.attributes.position.array;
+  cars.forEach((c, i) => {
+    const along = mod(c.offset + c.dir * c.k * 2 * HALF * t / LOOP, 2 * HALF) - HALF;
+    const [x, z] = c.axis === 0 ? [along, c.at] : [c.at, along];
+    const o = i * 16;
+    M[o] = c.axis === 0 ? 4.4 : 2.0; M[o + 5] = 1.4; M[o + 10] = c.axis === 0 ? 2.0 : 4.4;
+    M[o + 12] = x; M[o + 13] = 0.7; M[o + 14] = z; M[o + 15] = 1;
+    const dx = c.axis === 0 ? 2.3 * c.dir : 0, dz = c.axis === 1 ? 2.3 * c.dir : 0;
+    P.set([x + dx, 0.8, z + dz, x - dx, 0.9, z - dz], i * 6);
+  });
+  carMesh.instanceMatrix.needsUpdate = true;
+  carLights.g.attributes.position.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------- post
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.4, 0.95);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  composer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  const scale = renderer.getDrawingBufferSize(new THREE.Vector2()).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+  for (const m of pointMaterials) m.uniforms.uScale.value = scale;
+}
+
+// ---------------------------------------------------------------- camera + interaction
+const view = { yaw: 0, pitch: 0, zoom: 1 };
+function placeCamera(t) {
+  const u = t / LOOP;
+  const a = 2 * Math.PI * u + view.yaw;
+  const R = 420 * view.zoom;
+  const y = Math.max(25, (165 + 30 * Math.sin(4 * Math.PI * u)) * view.zoom + view.pitch);
+  camera.position.set(Math.cos(a) * R, y, Math.sin(a) * R);
+  camera.lookAt(0, 30, 0);
+  sky.position.copy(camera.position);  // keeps the horizon flat
+}
+
+let drag = null;
+canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointerup', () => { drag = null; });
+canvas.addEventListener('pointermove', e => {
+  if (!drag) return;
+  view.yaw += (e.clientX - drag.x) * 0.005;
+  view.pitch = Math.min(260, Math.max(-140, view.pitch - (e.clientY - drag.y) * 0.6));
+  drag = { x: e.clientX, y: e.clientY };
+  if (fixedT !== null) renderAt(fixedT);
+});
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  view.zoom = Math.min(1.8, Math.max(0.35, view.zoom * Math.exp(e.deltaY * 0.001)));
+  if (fixedT !== null) renderAt(fixedT);
+}, { passive: false });
+
+// ---------------------------------------------------------------- render
+function renderAt(t) {
+  t = mod(t, LOOP);
+  solidMaterial.uniforms.uPhase.value = t / LOOP;
+  glowMaterial.uniforms.uBlink.value = Math.exp(-mod(t * 60 / LOOP, 1) * 9);  // 1.5 s beacon flash
+  updateTraffic(t);
+  placeCamera(t);
+  composer.render();
+}
+window.renderAt = renderAt;
+
+addEventListener('resize', () => { resize(); if (fixedT !== null) renderAt(fixedT); });
+resize();
+
+if (fixedT !== null) {
+  renderAt(fixedT);
+} else {
+  const start = performance.now();
+  renderer.setAnimationLoop(() => renderAt((performance.now() - start) / 1000));
+}
+</script>
+</body>
+</html>
